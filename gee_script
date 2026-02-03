@@ -1,1 +1,231 @@
+// ------------------------------------------------------------
+// NDVI + Vegetation Classes Dashboard | Netherlands | Sentinel-2 SR
+// Fast national stats + Chart + Insights + Legend + Export
+// ------------------------------------------------------------
 
+// 0) SETTINGS
+var START = "2025-06-01";
+var END   = "2025-08-31";
+var CLOUD_PROB_THR = 30;     // 20–40 is typical
+var STATS_SCALE = 100;       // 60–100m is best for national stats speed
+var SIMPLIFY_M = 200;        // simplify boundary to speed reduceRegion
+
+// 1) ROI: Netherlands boundary
+var countries = ee.FeatureCollection("USDOS/LSIB_SIMPLE/2017");
+var nl = countries.filter(ee.Filter.eq("country_na", "Netherlands"));
+
+// Simplify geometry for faster stats (does not affect maps much)
+var nlGeom = nl.geometry().simplify(SIMPLIFY_M);
+
+Map.centerObject(nl, 7);
+
+// 2) Load Sentinel-2 SR + Cloud Probability
+var s2 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterBounds(nlGeom)
+  .filterDate(START, END);
+
+var s2cloud = ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
+  .filterBounds(nlGeom)
+  .filterDate(START, END);
+
+// 3) Join SR with cloud prob by system:index
+var join = ee.Join.saveFirst("cloud_prob");
+var joined = ee.ImageCollection(join.apply({
+  primary: s2,
+  secondary: s2cloud,
+  condition: ee.Filter.equals({
+    leftField: "system:index",
+    rightField: "system:index"
+  })
+}));
+
+// 4) Cloud mask
+function maskClouds(img) {
+  var cp = ee.Image(img.get("cloud_prob")).select("probability");
+  var clear = cp.lt(CLOUD_PROB_THR);
+
+  // Keep only reflectance bands used later; masks reduce compute cost
+  return img.updateMask(clear)
+            .copyProperties(img, ["system:time_start"]);
+}
+
+// 5) Composite (median) - do NOT clip here (faster)
+var composite = joined.map(maskClouds).median();
+
+// 6) NDVI (clip only final products)
+var ndvi = composite.normalizedDifference(["B8", "B4"]).rename("NDVI").clip(nlGeom);
+
+// 7) NDVI classification (0..3)
+var ndviClass = ndvi.expression(
+  "b('NDVI') < 0.0 ? 0" +
+  ": b('NDVI') < 0.2 ? 1" +
+  ": b('NDVI') < 0.5 ? 2" +
+  ": 3"
+).rename("class").clip(nlGeom);
+
+// 8) Visualization
+var ndviVis = {min: -0.2, max: 0.8};
+var classVis = {
+  min: 0, max: 3,
+  palette: [
+    "1f78b4", // 0 Water
+    "b15928", // 1 Bare/Built-up
+    "a6d854", // 2 Sparse veg
+    "33a02c"  // 3 Dense veg
+  ]
+};
+
+Map.addLayer(ndvi, ndviVis, "NDVI (median)");
+Map.addLayer(ndviClass, classVis, "NDVI Classes");
+
+// ------------------------------------------------------------
+// 9) FAST AREA STATS (no group reducer; 4 masked sums)
+// ------------------------------------------------------------
+var pixelAreaKm2 = ee.Image.pixelArea().divide(1e6); // km² per pixel
+
+function areaForClass(classId) {
+  var maskedArea = pixelAreaKm2.updateMask(ndviClass.eq(classId));
+  var km2 = ee.Number(maskedArea.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: nlGeom,
+    scale: STATS_SCALE,
+    maxPixels: 1e13,
+    tileScale: 16,
+    bestEffort: true
+  }).get("area"));
+
+  // reduceRegion band name is the first band name; ensure it exists
+  // To make band name stable, rename:
+  // We'll do that below using .rename('area') before reduceRegion.
+  return km2;
+}
+
+// Make stable band name "area"
+pixelAreaKm2 = pixelAreaKm2.rename("area");
+
+var area0 = ee.Number(pixelAreaKm2.updateMask(ndviClass.eq(0)).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: nlGeom,
+  scale: STATS_SCALE,
+  maxPixels: 1e13,
+  tileScale: 16,
+  bestEffort: true
+}).get("area"));
+
+var area1 = ee.Number(pixelAreaKm2.updateMask(ndviClass.eq(1)).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: nlGeom,
+  scale: STATS_SCALE,
+  maxPixels: 1e13,
+  tileScale: 16,
+  bestEffort: true
+}).get("area"));
+
+var area2 = ee.Number(pixelAreaKm2.updateMask(ndviClass.eq(2)).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: nlGeom,
+  scale: STATS_SCALE,
+  maxPixels: 1e13,
+  tileScale: 16,
+  bestEffort: true
+}).get("area"));
+
+var area3 = ee.Number(pixelAreaKm2.updateMask(ndviClass.eq(3)).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: nlGeom,
+  scale: STATS_SCALE,
+  maxPixels: 1e13,
+  tileScale: 16,
+  bestEffort: true
+}).get("area"));
+
+// Total area (km²) from class areas
+var totalKm2 = area0.add(area1).add(area2).add(area3);
+
+var statsFC = ee.FeatureCollection([
+  ee.Feature(null, {class_id: 0, class_name: "Water",               area_km2: area0, area_pct: area0.divide(totalKm2).multiply(100)}),
+  ee.Feature(null, {class_id: 1, class_name: "Bare / Built-up",     area_km2: area1, area_pct: area1.divide(totalKm2).multiply(100)}),
+  ee.Feature(null, {class_id: 2, class_name: "Sparse vegetation",   area_km2: area2, area_pct: area2.divide(totalKm2).multiply(100)}),
+  ee.Feature(null, {class_id: 3, class_name: "Dense vegetation",    area_km2: area3, area_pct: area3.divide(totalKm2).multiply(100)})
+]);
+
+print("NDVI class stats (km² and %)", statsFC);
+print("Total analyzed area (km²)", totalKm2);
+
+// ------------------------------------------------------------
+// 10) DASHBOARD (Legend + Chart + Auto Insights)
+// ------------------------------------------------------------
+var panel = ui.Panel({style: {position: "top-right", width: "320px", padding: "10px"}});
+panel.add(ui.Label({
+  value: "Netherlands NDVI Dashboard",
+  style: {fontSize: "16px", fontWeight: "bold"}
+}));
+panel.add(ui.Label("Sentinel-2 SR | " + START + " to " + END));
+panel.add(ui.Label("Cloud prob < " + CLOUD_PROB_THR + "% | Stats scale: " + STATS_SCALE + " m", {fontSize: "11px", color: "555"}));
+panel.add(ui.Label(" ", {margin: "6px 0"}));
+
+// Legend
+panel.add(ui.Label({value: "Legend", style: {fontWeight: "bold"}}));
+
+function legendRow(color, name) {
+  return ui.Panel({
+    layout: ui.Panel.Layout.Flow("horizontal"),
+    widgets: [
+      ui.Label({style: {backgroundColor: "#" + color, padding: "8px", margin: "0 8px 4px 0"}}),
+      ui.Label({value: name, style: {margin: "0 0 4px 0"}})
+    ]
+  });
+}
+panel.add(legendRow("1f78b4", "Water (NDVI < 0.0)"));
+panel.add(legendRow("b15928", "Bare/Built-up (0.0–0.2)"));
+panel.add(legendRow("a6d854", "Sparse vegetation (0.2–0.5)"));
+panel.add(legendRow("33a02c", "Dense vegetation (> 0.5)"));
+
+panel.add(ui.Label(" ", {margin: "6px 0"}));
+panel.add(ui.Label({value: "Area share by class (%)", style: {fontWeight: "bold"}}));
+
+// Chart
+var chart = ui.Chart.feature.byFeature(statsFC, "class_name", "area_pct")
+  .setChartType("ColumnChart")
+  .setOptions({
+    legend: {position: "none"},
+    hAxis: {title: "Class"},
+    vAxis: {title: "% of Netherlands (masked)"},
+    fontSize: 11
+  });
+panel.add(chart);
+
+panel.add(ui.Label(" ", {margin: "6px 0"}));
+panel.add(ui.Label({value: "Key insights (auto)", style: {fontWeight: "bold"}}));
+
+// Auto insights text (computed server-side, shown in console + panel)
+var insightText = ee.String("• Dense vegetation: ")
+  .cat(area3.divide(totalKm2).multiply(100).format("%.1f")).cat("%\n")
+  .cat("• Sparse vegetation: ").cat(area2.divide(totalKm2).multiply(100).format("%.1f")).cat("%\n")
+  .cat("• Bare/Built-up: ").cat(area1.divide(totalKm2).multiply(100).format("%.1f")).cat("%\n")
+  .cat("• Water: ").cat(area0.divide(totalKm2).multiply(100).format("%.1f")).cat("%");
+
+insightText.evaluate(function(t) {
+  panel.add(ui.Label(t, {whiteSpace: "pre", fontSize: "12px"}));
+});
+
+Map.add(panel);
+
+// ------------------------------------------------------------
+// 11) EXPORTS
+// ------------------------------------------------------------
+Export.image.toDrive({
+  image: ndvi,
+  description: "NL_NDVI_" + START + "_to_" + END,
+  region: nlGeom,
+  scale: 10,
+  maxPixels: 1e13
+});
+
+Export.image.toDrive({
+  image: ndviClass,
+  description: "NL_NDVI_Classes_" + START + "_to_" + END,
+  region: nlGeom,
+  scale: 10,
+  maxPixels: 1e13
+});
