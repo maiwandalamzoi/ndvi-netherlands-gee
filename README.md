@@ -35,13 +35,14 @@ This project maps and classifies vegetation conditions across the **Netherlands*
 ## 🗺️ Outputs
 
 ### NDVI Classes Map (Netherlands)
-![NDVI Classes Map](outputs/nl_ndvi_classes.png)
+![NDVI Classes Map](nl_ndvi_classes.png)
 
 ### Dashboard (NDVI + area statistics)
-![NDVI Dashboard](outputs/nl_dashboard.png)
+![NDVI Dashboard](nl_dashboard.png)
 
 ### Area share by NDVI class
-![NDVI Area Chart](outputs/nl_area_chart.png)
+![NDVI Area Chart](nl_area_chart.png.png)
+
 
 
 ## ▶️ How to run
