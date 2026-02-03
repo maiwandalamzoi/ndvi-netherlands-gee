@@ -33,14 +33,16 @@ This project maps and classifies vegetation conditions across the **Netherlands*
 - Cloud probability: `COPERNICUS/S2_CLOUD_PROBABILITY`
 
 ## 🗺️ Outputs
-### NDVI Classes Map
-![NDVI Classes](outputs/nl_ndvi_classes.png)
 
-### Dashboard (legend + chart + insights)
-![Dashboard](outputs/nl_dashboard.png)
+### NDVI Classes Map (Netherlands)
+![NDVI Classes Map](outputs/nl_ndvi_classes.png)
 
-### Area share chart
-![Area Chart](outputs/nl_area_chart.png)
+### Dashboard (NDVI + area statistics)
+![NDVI Dashboard](outputs/nl_dashboard.png)
+
+### Area share by NDVI class
+![NDVI Area Chart](outputs/nl_area_chart.png)
+
 
 ## ▶️ How to run
 1. Open Google Earth Engine Code Editor
