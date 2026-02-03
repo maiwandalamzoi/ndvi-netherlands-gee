@@ -48,7 +48,7 @@ This project maps and classifies vegetation conditions across the **Netherlands*
 ## ▶️ How to run
 1. Open Google Earth Engine Code Editor
 2. Copy the script from:
-   `gee_script/ndvi_netherlands_dashboard.js`
+   `gee_script`
 3. Click **Run**
 4. (Optional) Use **Tasks** to export NDVI and classified maps to Google Drive
 
